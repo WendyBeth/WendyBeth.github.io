@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="x-ua-compatible" content="ie=edge">
+  <title>An Accumulation of Errors | Maintaining Test Databases in Rails, Part 1</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <meta property="og:title" content="Maintaining Test Databases in Rails, Part 1">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="/posts/maintaining-test-databases-in-rails-part-1">
+  <meta property="og:description" content="">
+  <meta property="og:site_name" content="An Accumulation of Errors">
+  <meta property="og:image" content="/assets/og-image.jpg">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:url" content="/posts/maintaining-test-databases-in-rails-part-1">
+  <meta name="twitter:title" content="Maintaining Test Databases in Rails, Part 1">
+  <meta name="twitter:description" content="">
+  <meta name="twitter:image" content="/assets/og-image.jpg">
+
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link href="/feed.xml" type="application/rss+xml" rel="alternate" title="An Accumulation of Errors Last 10 blog posts" />
+
+  
+
+  
+    <link type="text/css" rel="stylesheet" href="/assets/dark.css">
+  
+</head>
+
+<body>
+  <main role="main">
+    <div class="grid grid-centered">
+      <div class="grid-cell">
+        <nav class="header-nav reveal">
+  <a href="/" class="header-logo" title="An Accumulation of Errors">An Accumulation of Errors</a>
+  <ul class="header-links">
+    
+    
+    
+    
+      <li>
+        <a href="https://github.com/WendyBeth" target="_blank" title="GitHub">
+          <span class="icon icon-social-github"></span>
+        </a>
+      </li>
+    
+    
+    
+    
+    
+    
+      <li>
+        <a href="mailto:wendybeth010@gmail.com" title="Email">
+          <span class="icon icon-at"></span>
+        </a>
+      </li>
+    
+    
+      <li>
+        <a href="/feed.xml" target="_blank" title="RSS">
+          <span class="icon icon-social-rss"></span>
+        </a>
+      </li>
+    
+  </ul>
+</nav>
+
+        <article class="article reveal">
+          <header class="article-header">
+            <h1>Maintaining Test Databases in Rails, Part 1</h1>
+            <p></p>
+            <div class="article-list-footer">
+              <span class="article-list-date">
+                March 30, 2017
+              </span>
+              <span class="article-list-divider">-</span>
+              <span class="article-list-minutes">
+                
+                
+                  7 minute read
+                
+              </span>
+              <span class="article-list-divider">-</span>
+              <div class="article-list-tags">
+                
+                  <a href="/tag/rails">rails</a>
+                
+                  <a href="/tag/testing">testing</a>
+                
+              </div>
+            </div>
+          </header>
+
+          <div class="article-content">
+            <h2 id="maintaining-test-databases">Maintaining Test Databases</h2>
+
+<p>Assumed tools:</p>
+
+<ul>
+  <li>Rails (ActiveRecord) - prior to 5.1</li>
+  <li>Minitest (the principles should apply to RSpec - the syntax won’t)</li>
+  <li>Capybara</li>
+</ul>
+
+<p><a href="https://github.com/DatabaseCleaner/database_cleaner">DatabaseCleaner</a> is a
+well-known gem that helps Rails developers manage database access from their
+test suites. I’ve been using it for a couple of years but wanted to take a
+deeper look into the specifies of its usage, so I did some research and
+experimenting in order to clear up a few gaps in my knowledge. I would like to
+share some of that process for review and in hopes of clarifying some of the
+more confusing points of test-database management in Rails for others who, like
+me, may have missed some of the finer details.</p>
+
+<p>This post is the first in a series that explores test database management in
+Rails. It provides a brief overview of the three database-cleaning strategies
+that can be used by DatabaseCleaner (with ActiveRecord, specifically) and an
+explanation for when and why we would ever need to look beyond the fastest,
+most convenient database-cleaning strategy, <code class="highlighter-rouge">:transaction</code>.</p>
+
+<h3 id="section-1-databasecleaner-cleaning-strategies">Section 1: DatabaseCleaner cleaning strategies</h3>
+
+<p>I came up with the idea to write this post when I came upon the following two
+lines of code while trying to think of how to introduce testing to newer
+developers. I thought I understood what this code did, but while trying to craft
+an explanation that would make sense to someone else, I realized my knowledge
+wasn’t as complete as I thought it was.</p>
+
+<div class="language-ruby highlighter-rouge"><pre class="highlight"><code><span class="no">DatabaseCleaner</span><span class="p">.</span><span class="nf">strategy</span> <span class="o">=</span> <span class="ss">:truncation</span>
+<span class="no">DatabaseCleaner</span><span class="p">.</span><span class="nf">clean</span>
+</code></pre>
+</div>
+
+<p>I realized I didn’t really understand what <code class="highlighter-rouge">:truncation</code> meant in this context.
+So I set out to learn.</p>
+
+<p>A strategy for DatabaseCleaner outlines how the database is wiped of test data
+between individual tests, so that each test starts with a clean (more
+importantly: <em>controlled</em>) slate.</p>
+
+<p>There are three strategies that DatabaseCleaner provides, each named for a SQL
+command that manages the removal of data from a relational database. There’s
+<code class="highlighter-rouge">:transaction</code>, <code class="highlighter-rouge">:truncation</code>, and <code class="highlighter-rouge">:deletion</code>.</p>
+
+<p><code class="highlighter-rouge">:transaction</code>, according to the DatabaseCleaner documentation, is the <em>fastest</em>
+strategy.</p>
+
+<p><a href="https://en.wikipedia.org/wiki/Database_transaction">Transactions</a> are a useful
+concept in the management of databases. They entail a process of wrapping a series
+of database commands in a block and then ensuring that each and every command in the
+block is successful before committing or, should even one fail, undoing all of them
+at once. This is where the <code class="highlighter-rouge">ROLLBACK</code> command comes in. It undoes everything within
+the transaction, restoring the database to its pre-transaction state.</p>
+
+<p>DatabaseCleaner takes advantage of the <code class="highlighter-rouge">ROLLBACK</code> command between tests, by
+wrapping each one in a transaction (started with the line
+<code class="highlighter-rouge">DatabaseCleaner.start</code>, usually called in the <code class="highlighter-rouge">setup</code> method or in a <code class="highlighter-rouge">before</code>
+block), and then rools that transaction back before the start of the next test
+(with <code class="highlighter-rouge">DatabaseCleaner.clean</code>, usually called in the <code class="highlighter-rouge">teardown</code> method or in an
+<code class="highlighter-rouge">after</code> block).</p>
+
+<p>I have come across the concept of transactions many times over the past few years,
+as they are a useful and prevalent tool when creating and managing web applications.
+Because I am self-taught, I often come upon strange little gaps in my knowledge,
+and when it came to the <code class="highlighter-rouge">:truncation</code> and <code class="highlighter-rouge">:deletion</code> strategies, I had little
+context beyond what I’ve explained to understand what was going on.</p>
+
+<p>The most immediate source of information, which will definitely be relevant to
+DatabaseCleaner, is in the DatabaseCleaner documentation itself. Because I’m sure
+there is a rabbit hole of knowledge that just searching for ‘truncation’ or ‘deletion’
+independently of DatabaseCleaner could lead me down, I’d rather follow the resources
+that the maintainers of the DatabaseCleaner gem find most relevant to the usage of their gem.</p>
+
+<blockquote>
+  <p>For the SQL libraries, the fastest option will be to use <code class="highlighter-rouge">:transaction</code> as
+transactions are simply rolled back. If you can use this strategy you should.
+However, if you wind up needing to use multiple database connections in your
+tests (i.e. your tests are in a different process than your application)
+then using this strategy becomes a bit more difficult. You can get around the
+problem in a number of ways.</p>
+
+  <p>One common approach is to force all processes to use the same database connection
+(common ActiveRecord hack) however this approach has been reported to result in
+non-deterministic failures.</p>
+
+  <p>An easier, but slower solution is to use the <code class="highlighter-rouge">:truncation</code> or <code class="highlighter-rouge">:deletion</code> strategy.</p>
+</blockquote>
+
+<p>So the problem addressed by <code class="highlighter-rouge">:truncation</code> (or <code class="highlighter-rouge">:deletion</code>) is caused by the
+usage of JavaScript-enabled drivers used by Capybara, typically in
+integration/acceptance/system tests.</p>
+
+<p>When a new connection to the database is opened up, that connection cannot see
+transaction states that are currently being managed by other connections. In the
+case of an integration/system/acceptance test that uses a JavaScript-enabled
+driver, the driver opens up a browser with a different connection to the test
+database from the test server itself. This means that data created in the test
+by the server (say you call <code class="highlighter-rouge">Post.create</code> in a test) and data created in the
+test by the browser (calling <code class="highlighter-rouge">click_button 'Submit'</code> after filling out a new
+Post form) are not handled together by a transaction wrapped around an
+individual test. The transaction will see (and thus rollback) the data created
+by the driver but not the data created by the server, and thus data will float
+around in a fairly unpredictable manner between tests, causing all sorts of havoc.</p>
+
+<p>So knowing why <code class="highlighter-rouge">:transaction</code> can be a problematic strategy to use with integration
+tests, then, let’s move on to <code class="highlighter-rouge">:truncation</code> and <code class="highlighter-rouge">:deletion</code>.</p>
+
+<p>This <a href="http://stackoverflow.com/questions/11419536/postgresql-truncation-speed/11423886#11423886">answer on StackOverflow</a>
+that’s linked to in the DatabaseCleaner documentation is as good a starting point
+as any. This sentence, in particular, gives away a lot of useful information with
+relatively few words:</p>
+
+<blockquote>
+  <p>A <code class="highlighter-rouge">TRUNCATE</code> gives you a completely new table and indexes as if they were just
+<code class="highlighter-rouge">CREATE</code>d. It’s like you deleted all the records, reindexed the table and did
+a vacuum full.</p>
+</blockquote>
+
+<p>This was my ‘ah-ha!’ moment, that lead to the realization that <code class="highlighter-rouge">TRUNCATE</code> and
+<code class="highlighter-rouge">DELETE</code> (like <code class="highlighter-rouge">TRANSACTION</code> and <code class="highlighter-rouge">ROLLBACK</code>) are just SQL commands.</p>
+
+<p>To summarize the most useful bits of the StackOverflow answer, which compares
+and contrasts <code class="highlighter-rouge">DELETE</code> and <code class="highlighter-rouge">TRUNCATE</code> (providing a definition through inference
+about what each command actually is on its own):</p>
+
+<ul>
+  <li>The <code class="highlighter-rouge">DELETE</code> statement leaves behind some amount of cruft, such as records
+that rows existed at certain indices even after the rows are gone - the
+next object’s unique ID will be however many objects <em>are</em> and/or <em>have been</em>
+in the database, plus one (if there are four objects currently in the
+database and two other objects were deleted awhile ago, the next ID will be 7)</li>
+  <li><code class="highlighter-rouge">TRUNCATE</code> wipes the table completely so that it starts from ground zero -
+the next object’s unique ID will be 1, no matter how many objects existed or
+existed and then were deleted before the <code class="highlighter-rouge">TRUNCATE</code> command was run</li>
+</ul>
+
+<p>Note how much we now know about <code class="highlighter-rouge">TRUNCATE</code>, and how much we can extrapolate,
+just from the material right in front of us. <code class="highlighter-rouge">DELETE</code> and <code class="highlighter-rouge">TRUNCATE</code> will wipe
+the database completely clean, and neither command relies on transaction state
+to do so. This means that the database state can be read the same from every
+connection. Data is deleted when it should be, and all connections are aware
+of the current state of the database when there are no transactions running.</p>
+
+<p>The transaction/rollback process is faster, because it never commits anything to
+the database.</p>
+
+<p>A “formal” definition of the <code class="highlighter-rouge">TRUNCATE</code> command from
+<a href="https://en.wikipedia.org/wiki/Truncate_(SQL)">this Wikipedia article</a> helps to
+connect the definition gained through inference about how <code class="highlighter-rouge">:truncation</code> operates
+as a strategy for DatabaseCleaner in our tests to the wider world of general
+database management:</p>
+
+<blockquote>
+  <p>In SQL, the <code class="highlighter-rouge">TRUNCATE TABLE</code> statement is a Data Definition Language (DDL)
+operation that marks the extents of a table for deallocation (empty for reuse).
+<strong>The result of this operation quickly removes all data from a table</strong>, typically
+bypassing a number of integrity enforcing operations.</p>
+</blockquote>
+
+<p>So to summarize:</p>
+
+<ol>
+  <li>Using <code class="highlighter-rouge">strategy = :transaction</code> will wrap each test in a database
+transaction, and then rollback any changes that were made. This is fast, because
+it never commits anything to the actual test database, but dangerous when there
+are multiple points of access to the database that cannot see one another (such
+as when we are using Capybara with a JavaScript-enabled driver).</li>
+  <li>Using <code class="highlighter-rouge">strategy = :truncation</code> removes all data from all of the tables in the
+test database between each test, but does not leave the database in a ‘clean’
+state - new record IDs will be generated with awareness that there used to be
+rows in the table (you’ll never get another record with id=1), for example</li>
+  <li>Using <code class="highlighter-rouge">strategy = :deletion</code> wipes the database <em>completely</em> clean - removing
+all data and all memory of data from the database, starting it over from scratch
+as if it’s never been touched</li>
+</ol>
+
+<p>I have more posts on the subject of test database management, but since learning
+so much from writing them, I’ve realized I need to go back and maybe
+restructure/rewrite them a little bit.</p>
+
+<p>Some of the questions I had and am attempting to address in the following posts
+are:</p>
+
+<ol>
+  <li>If we have an application that uses the <code class="highlighter-rouge">:rack_test</code> driver for all of its
+integration tets, can we safely get away with using <code class="highlighter-rouge">:transaction</code> as a strategy
+for managing the test database?</li>
+  <li>What happens when we use <code class="highlighter-rouge">:transaction</code> for unit tests and <code class="highlighter-rouge">:truncation</code> or
+<code class="highlighter-rouge">:deletion</code> only for integration tests? Is using different strategies through
+the same test suite in a controlled fashion a recipe for chaos, or an efficient
+way to balance data integrity with test speed?</li>
+  <li>When should we distinguish between the <code class="highlighter-rouge">:truncation</code> and <code class="highlighter-rouge">:deletion</code> strategies?</li>
+  <li>What has Rails 5.1 done to address these issues (as you can read in <a href="http://weblog.rubyonrails.org/2017/2/23/Rails-5-1-beta1/">this
+blog post</a>, it has)?</li>
+</ol>
+
+          </div>
+
+          <div class="article-share" style="display: none">
+            
+            <a href="" title="Share on Twitter" onclick="window.open('https://twitter.com/home?status=Maintaining Test Databases in Rails, Part 1 - /posts/maintaining-test-databases-in-rails-part-1 ', 'newwindow', 'width=500, height=225'); return false;" data-turbolinks="false">
+              <svg enable-background="new 0 0 128 128" width="15px" version="1.1" viewBox="0 0 128 128" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g id="_x37__stroke"><g id="Twitter"><rect clip-rule="evenodd" fill="none" fill-rule="evenodd" height="128" width="128"/><path clip-rule="evenodd" d="M128,23.294    c-4.703,2.142-9.767,3.59-15.079,4.237c5.424-3.328,9.587-8.606,11.548-14.892c-5.079,3.082-10.691,5.324-16.687,6.526    c-4.778-5.231-11.608-8.498-19.166-8.498c-14.493,0-26.251,12.057-26.251,26.927c0,2.111,0.225,4.16,0.676,6.133    C41.217,42.601,21.871,31.892,8.91,15.582c-2.261,3.991-3.554,8.621-3.554,13.552c0,9.338,4.636,17.581,11.683,22.412    c-4.297-0.131-8.355-1.356-11.901-3.359v0.331c0,13.051,9.053,23.937,21.074,26.403c-2.201,0.632-4.523,0.948-6.92,0.948    c-1.69,0-3.343-0.162-4.944-0.478c3.343,10.694,13.035,18.483,24.53,18.691c-8.986,7.227-20.315,11.533-32.614,11.533    c-2.119,0-4.215-0.123-6.266-0.37c11.623,7.627,25.432,12.088,40.255,12.088c48.309,0,74.717-41.026,74.717-76.612    c0-1.171-0.023-2.342-0.068-3.49C120.036,33.433,124.491,28.695,128,23.294" fill-rule="evenodd" id="Twitter_1_"/></g></g></svg>
+            </a>
+            <a href="" title="Share on Facebook" onclick="window.open('https://www.facebook.com/sharer/sharer.php?u=/posts/maintaining-test-databases-in-rails-part-1', 'newwindow', 'width=500, height=500'); return false;" data-turbolinks="false">
+              <svg enable-background="new 0 0 128 128" width="15px" version="1.1" viewBox="0 0 128 128" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g id="_x31__stroke"><g id="Facebook_1_"><rect fill="none" height="128" width="128"/><path clip-rule="evenodd" d="M68.369,128H7.065C3.162,128,0,124.836,0,120.935    V7.065C0,3.162,3.162,0,7.065,0h113.871C124.837,0,128,3.162,128,7.065v113.87c0,3.902-3.163,7.065-7.064,7.065H88.318V78.431    h16.638l2.491-19.318H88.318V46.78c0-5.593,1.553-9.404,9.573-9.404l10.229-0.004V20.094c-1.769-0.235-7.841-0.761-14.906-0.761    c-14.749,0-24.846,9.003-24.846,25.535v14.246H51.688v19.318h16.681V128z" fill-rule="evenodd" id="Facebook"/></g></g></svg>
+            </a>
+            <a href="" title="Share on Google+" onclick="window.open('https://plus.google.com/share?url=/posts/maintaining-test-databases-in-rails-part-1', 'newwindow', 'width=550, height=400'); return false;" data-turbolinks="false">
+              <svg enable-background="new 0 0 128 128" version="1.1" viewBox="0 0 128 128" width="20px" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g id="_x35__stroke"><g id="Google_Plus"><rect clip-rule="evenodd" fill="none" fill-rule="evenodd" height="128" width="128"/><path clip-rule="evenodd" d="M40.654,55.935v16.13    c0,0,15.619-0.021,21.979-0.021C59.189,82.5,53.834,88.194,40.654,88.194c-13.338,0-23.748-10.832-23.748-24.194    s10.41-24.194,23.748-24.194c7.052,0,11.607,2.483,15.784,5.944c3.344-3.35,3.065-3.828,11.573-11.877    c-7.222-6.586-16.822-10.6-27.357-10.6C18.201,23.273,0,41.507,0,64c0,22.493,18.201,40.727,40.654,40.727    c33.561,0,41.763-29.275,39.044-48.792H40.654z M113.912,56.742V42.628h-10.063v14.113H89.358v10.081h14.491v14.517h10.063V66.823    H128V56.742H113.912z" fill-rule="evenodd" id="Google_Plus_1_"/></g></g></svg>
+            </a>
+          </div>
+
+          
+            <div id="disqus_thread" class="article-comments"></div>
+            <script>
+              (function() {
+                  var d = document, s = d.createElement('script');
+                  s.src = '//accumulatederrors.disqus.com/embed.js';
+                  s.setAttribute('data-timestamp', +new Date());
+                  (d.head || d.body).appendChild(s);
+              })();
+            </script>
+            <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+          
+        </article>
+        <footer class="footer reveal">
+  <p>
+    Powered by <a href="https://jekyllrb.com/">Jekyll</a>.
+    Prettified by <a href="https://github.com/nielsenramon/chalk">Chalk</a>.
+  </p>
+  <p>
+    Opinions are my own and are not reflective of nor endorsed by my employer.
+    <br/>
+    But <a href="https://littlelines.com">my employer</a> rocks all the
+    socks.
+  </p>
+</footer>
+
+      </div>
+    </div>
+  </main>
+  
+  <script src="https://ajax.googleapis.com/ajax/libs/webfont/1.6.16/webfont.js"></script>
+  <script>
+    WebFont.load({
+      google: {
+        families: ['Cormorant Garamond:700', 'Lato:300,400,700']
+      }
+    });
+  </script>
+
+
+
+
+<script type="text/javascript" src="/assets/vendor.js"></script>
+<script type="text/javascript" src="/assets/application.js"></script>
+
+</body>
+</html>
